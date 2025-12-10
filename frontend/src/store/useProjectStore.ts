@@ -786,8 +786,9 @@ const debouncedUpdatePage = debounce(
     set({ isGlobalLoading: true, error: null });
     try {
       const response = await api.exportPPTX(currentProject.id);
+      // 优先使用相对路径，避免 Docker 环境下的端口问题
       const downloadUrl =
-        response.data?.download_url_absolute || response.data?.download_url;
+        response.data?.download_url || response.data?.download_url_absolute;
 
       if (!downloadUrl) {
         throw new Error('导出链接获取失败');
@@ -810,8 +811,9 @@ const debouncedUpdatePage = debounce(
     set({ isGlobalLoading: true, error: null });
     try {
       const response = await api.exportPDF(currentProject.id);
+      // 优先使用相对路径，避免 Docker 环境下的端口问题
       const downloadUrl =
-        response.data?.download_url_absolute || response.data?.download_url;
+        response.data?.download_url || response.data?.download_url_absolute;
 
       if (!downloadUrl) {
         throw new Error('导出链接获取失败');
