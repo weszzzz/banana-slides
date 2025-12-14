@@ -10,15 +10,28 @@ Configuration Priority (highest to lowest):
     3. Default values
 
 Environment Variables:
+    # Unified configuration (backward compatibility)
     AI_PROVIDER_FORMAT: "gemini" (default) or "openai"
     
-    For Gemini format (Google GenAI SDK):
-        GOOGLE_API_KEY: API key
-        GOOGLE_API_BASE: API base URL (e.g., https://aihubmix.com/gemini)
+    # Separated configuration (overrides unified config)
+    TEXT_PROVIDER_FORMAT: "gemini" or "openai"
+    IMAGE_PROVIDER_FORMAT: "gemini" or "openai"
     
-    For OpenAI format:
-        OPENAI_API_KEY: API key
-        OPENAI_API_BASE: API base URL (e.g., https://aihubmix.com/v1)
+    # Gemini format configuration
+    GOOGLE_API_KEY: API key (for unified config)
+    GOOGLE_API_BASE: API base URL (e.g., https://aihubmix.com/gemini)
+    TEXT_GEMINI_API_KEY: API key for text provider
+    TEXT_GEMINI_API_BASE: API base URL for text provider
+    IMAGE_GEMINI_API_KEY: API key for image provider
+    IMAGE_GEMINI_API_BASE: API base URL for image provider
+    
+    # OpenAI format configuration
+    OPENAI_API_KEY: API key (for unified config)
+    OPENAI_API_BASE: API base URL (e.g., https://aihubmix.com/v1)
+    TEXT_OPENAI_API_KEY: API key for text provider
+    TEXT_OPENAI_API_BASE: API base URL for text provider
+    IMAGE_OPENAI_API_KEY: API key for image provider
+    IMAGE_OPENAI_API_BASE: API base URL for image provider
 """
 import os
 import logging
@@ -38,7 +51,7 @@ __all__ = [
 
 def get_provider_format() -> str:
     """
-    Get the configured AI provider format
+    Get the configured AI provider format (for backward compatibility)
     
     Priority:
         1. Flask app.config['AI_PROVIDER_FORMAT'] (from database settings)
@@ -63,9 +76,9 @@ def get_provider_format() -> str:
     return os.getenv('AI_PROVIDER_FORMAT', 'gemini').lower()
 
 
-def _get_provider_config() -> Tuple[str, str, str]:
+def _get_unified_provider_config() -> Tuple[str, str, str]:
     """
-    Get provider configuration based on AI_PROVIDER_FORMAT
+    Get provider configuration based on unified AI_PROVIDER_FORMAT (backward compatibility)
     
     Priority for API keys/base URLs:
         1. Flask app.config (from database settings)
@@ -131,6 +144,55 @@ def _get_provider_config() -> Tuple[str, str, str]:
     return provider_format, api_key, api_base
 
 
+def _get_separated_provider_config(provider_type: str) -> Tuple[str, str, str]:
+    """
+    Get provider configuration for separated text/image providers
+    
+    Args:
+        provider_type: "text" or "image"
+        
+    Returns:
+        Tuple of (provider_format, api_key, api_base)
+        
+    Raises:
+        ValueError: If required configuration is not set
+    """
+    # Get the provider format for this type
+    format_var = f"{provider_type.upper()}_PROVIDER_FORMAT"
+    provider_format = os.getenv(format_var, '').lower()
+    
+    if not provider_format:
+        # Fall back to unified configuration
+        return _get_unified_provider_config()
+    
+    if provider_format == 'openai':
+        api_key = os.getenv(f"{provider_type.upper()}_OPENAI_API_KEY")
+        api_base = os.getenv(f"{provider_type.upper()}_OPENAI_API_BASE")
+        
+        if not api_key:
+            raise ValueError(
+                f"{format_var}=openai requires {provider_type.upper()}_OPENAI_API_KEY to be set"
+            )
+    elif provider_format == 'gemini':
+        api_key = os.getenv(f"{provider_type.upper()}_GEMINI_API_KEY")
+        api_base = os.getenv(f"{provider_type.upper()}_GEMINI_API_BASE")
+        
+        if not api_key:
+            # Fall back to unified Gemini config
+            api_key = os.getenv('GOOGLE_API_KEY')
+            api_base = os.getenv('GOOGLE_API_BASE')
+            
+            if not api_key:
+                raise ValueError(
+                    f"{format_var}=gemini requires either {provider_type.upper()}_GEMINI_API_KEY "
+                    f"or GOOGLE_API_KEY to be set"
+                )
+    else:
+        raise ValueError(f"Invalid {format_var}: {provider_format}. Must be 'gemini' or 'openai'")
+    
+    return provider_format, api_key, api_base
+
+
 def get_text_provider(model: str = "gemini-3-flash-preview") -> TextProvider:
     """
     Factory function to get text generation provider based on configuration
@@ -141,7 +203,12 @@ def get_text_provider(model: str = "gemini-3-flash-preview") -> TextProvider:
     Returns:
         TextProvider instance (GenAITextProvider or OpenAITextProvider)
     """
-    provider_format, api_key, api_base = _get_provider_config()
+    # Check for separated configuration first
+    if os.getenv('TEXT_PROVIDER_FORMAT'):
+        provider_format, api_key, api_base = _get_separated_provider_config('text')
+    else:
+        # Use unified configuration for backward compatibility
+        provider_format, api_key, api_base = _get_unified_provider_config()
     
     if provider_format == 'openai':
         logger.info(f"Using OpenAI format for text generation, model: {model}")
@@ -165,7 +232,12 @@ def get_image_provider(model: str = "gemini-3-pro-image-preview") -> ImageProvid
         OpenAI format does NOT support 4K resolution, only 1K is available.
         If you need higher resolution images, use Gemini format.
     """
-    provider_format, api_key, api_base = _get_provider_config()
+    # Check for separated configuration first
+    if os.getenv('IMAGE_PROVIDER_FORMAT'):
+        provider_format, api_key, api_base = _get_separated_provider_config('image')
+    else:
+        # Use unified configuration for backward compatibility
+        provider_format, api_key, api_base = _get_unified_provider_config()
     
     if provider_format == 'openai':
         logger.info(f"Using OpenAI format for image generation, model: {model}")

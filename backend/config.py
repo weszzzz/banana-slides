@@ -48,6 +48,10 @@ class Config:
     # AI Provider 格式配置: "gemini" (Google GenAI SDK) 或 "openai" (OpenAI SDK)
     AI_PROVIDER_FORMAT = os.getenv('AI_PROVIDER_FORMAT', 'gemini')
     
+    # 分离的供应商配置 (如果设置，将覆盖 AI_PROVIDER_FORMAT)
+    TEXT_PROVIDER_FORMAT = os.getenv('TEXT_PROVIDER_FORMAT', '')  # "gemini" 或 "openai"
+    IMAGE_PROVIDER_FORMAT = os.getenv('IMAGE_PROVIDER_FORMAT', '')  # "gemini" 或 "openai"
+    
     # GenAI (Gemini) 格式专用配置
     GENAI_TIMEOUT = float(os.getenv('GENAI_TIMEOUT', '300.0'))  # Gemini 超时时间（秒）
     GENAI_MAX_RETRIES = int(os.getenv('GENAI_MAX_RETRIES', '2'))  # Gemini 最大重试次数（应用层实现）
@@ -57,6 +61,18 @@ class Config:
     OPENAI_API_BASE = os.getenv('OPENAI_API_BASE', 'https://aihubmix.com/v1')
     OPENAI_TIMEOUT = float(os.getenv('OPENAI_TIMEOUT', '300.0'))  # 增加到 5 分钟（生成清洁背景图需要很长时间）
     OPENAI_MAX_RETRIES = int(os.getenv('OPENAI_MAX_RETRIES', '2'))  # 减少重试次数，避免过多重试导致累积超时
+    
+    # 文字供应商专用配置
+    TEXT_OPENAI_API_KEY = os.getenv('TEXT_OPENAI_API_KEY', '')
+    TEXT_OPENAI_API_BASE = os.getenv('TEXT_OPENAI_API_BASE', '')
+    TEXT_GEMINI_API_KEY = os.getenv('TEXT_GEMINI_API_KEY', '')
+    TEXT_GEMINI_API_BASE = os.getenv('TEXT_GEMINI_API_BASE', '')
+    
+    # 图片供应商专用配置
+    IMAGE_OPENAI_API_KEY = os.getenv('IMAGE_OPENAI_API_KEY', '')
+    IMAGE_OPENAI_API_BASE = os.getenv('IMAGE_OPENAI_API_BASE', '')
+    IMAGE_GEMINI_API_KEY = os.getenv('IMAGE_GEMINI_API_KEY', '')
+    IMAGE_GEMINI_API_BASE = os.getenv('IMAGE_GEMINI_API_BASE', '')
     
     # AI 模型配置
     TEXT_MODEL = os.getenv('TEXT_MODEL', 'gemini-3-flash-preview')
