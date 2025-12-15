@@ -248,6 +248,24 @@ export const generatePageImage = async (
 };
 
 /**
+ * 上传页面图片
+ */
+export const uploadPageImage = async (
+  projectId: string,
+  pageId: string,
+  imageFile: File
+): Promise<ApiResponse> => {
+  const formData = new FormData();
+  formData.append('image', imageFile);
+  
+  const response = await apiClient.post<ApiResponse>(
+    `/api/projects/${projectId}/pages/${pageId}/upload/image`,
+    formData
+  );
+  return response.data;
+};
+
+/**
  * 编辑图片（自然语言修改）
  */
 export const editPageImage = async (

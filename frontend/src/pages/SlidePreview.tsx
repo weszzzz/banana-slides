@@ -25,7 +25,7 @@ import type { Material } from '@/api/endpoints';
 import { SlideCard } from '@/components/preview/SlideCard';
 import { useProjectStore } from '@/store/useProjectStore';
 import { getImageUrl } from '@/api/client';
-import { getPageImageVersions, setCurrentImageVersion, updateProject, uploadTemplate } from '@/api/endpoints';
+import { getPageImageVersions, setCurrentImageVersion, updateProject, uploadTemplate, uploadPageImage } from '@/api/endpoints';
 import type { ImageVersion, DescriptionContent } from '@/types';
 import { normalizeErrorMessage } from '@/utils';
 
@@ -237,6 +237,36 @@ export const SlidePreview: React.FC = () => {
       });
     }
   }, [currentProject, selectedIndex, pageGeneratingTasks, generatePageImage, show]);
+
+  const handleUploadPageImage = useCallback(async () => {
+    if (!currentProject || !projectId) return;
+    const page = currentProject.pages[selectedIndex];
+    if (!page.id) return;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e: Event) => {
+      const target = e.target as HTMLInputElement;
+      const file = target.files?.[0];
+      if (!file) return;
+
+      if (!file.type.startsWith('image/')) {
+        show({ message: '请选择图片文件', type: 'error' });
+        return;
+      }
+
+      try {
+        await uploadPageImage(projectId, page.id, file);
+        await syncProject(projectId);
+        show({ message: '图片上传成功', type: 'success' });
+      } catch (error: any) {
+        const errorMessage = normalizeErrorMessage(error?.response?.data?.error?.message || error.message || '上传失败');
+        show({ message: errorMessage, type: 'error' });
+      }
+    };
+    input.click();
+  }, [currentProject, projectId, selectedIndex, syncProject, show]);
 
   const handleSwitchVersion = async (versionId: string) => {
     if (!currentProject || !selectedPage?.id || !projectId) return;
@@ -902,12 +932,21 @@ export const SlidePreview: React.FC = () => {
                           </p>
                           {(!selectedPage?.id || !pageGeneratingTasks[selectedPage.id]) && 
                            selectedPage?.status !== 'GENERATING' && (
-                            <Button
-                              variant="primary"
-                              onClick={handleRegeneratePage}
-                            >
-                              生成此页
-                            </Button>
+                            <div className="flex gap-3">
+                              <Button
+                                variant="primary"
+                                onClick={handleRegeneratePage}
+                              >
+                                生成此页
+                              </Button>
+                              <Button
+                                variant="outline"
+                                icon={<Upload size={16} />}
+                                onClick={handleUploadPageImage}
+                              >
+                                上传图片
+                              </Button>
+                            </div>
                           )}
                         </div>
                       </div>

@@ -668,3 +668,86 @@ def set_current_image_version(project_id, page_id, version_id):
     except Exception as e:
         db.session.rollback()
         return error_response('SERVER_ERROR', str(e), 500)
+
+
+@page_bp.route('/<project_id>/pages/<page_id>/upload/image', methods=['POST'])
+def upload_page_image(project_id, page_id):
+    """
+    POST /api/projects/{project_id}/pages/{page_id}/upload/image - Upload page image
+    
+    Request: multipart/form-data
+    - image: file upload (required)
+    
+    Response:
+    {
+        "code": 0,
+        "data": {
+            "id": "page_id",
+            "generated_image_url": "/files/...",
+            ...
+        }
+    }
+    """
+    try:
+        page = Page.query.get(page_id)
+        
+        if not page or page.project_id != project_id:
+            return not_found('Page')
+        
+        if 'image' not in request.files:
+            return bad_request("Image file is required")
+        
+        image_file = request.files['image']
+        
+        if image_file.filename == '':
+            return bad_request("No file selected")
+        
+        file_service = FileService(current_app.config['UPLOAD_FOLDER'])
+        
+        try:
+            from PIL import Image
+            img = Image.open(image_file)
+            img.load()
+            
+            version_number = PageImageVersion.query.filter_by(page_id=page_id).count() + 1
+            
+            image_path = file_service.save_generated_image(
+                image=img,
+                project_id=project_id,
+                page_id=page_id,
+                image_format='PNG',
+                version_number=version_number
+            )
+            
+            PageImageVersion.query.filter_by(page_id=page_id).update({'is_current': False})
+            
+            version = PageImageVersion(
+                page_id=page_id,
+                image_path=image_path,
+                version_number=version_number,
+                prompt="Uploaded by user",
+                is_current=True
+            )
+            db.session.add(version)
+            
+            page.generated_image_path = image_path
+            page.status = 'COMPLETED'
+            page.updated_at = datetime.utcnow()
+            
+            project = Project.query.get(project_id)
+            if project:
+                project.updated_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            logger.info(f"Successfully uploaded image for page {page_id}")
+            return success_response(page.to_dict(include_versions=True))
+            
+        except Exception as img_error:
+            logger.error(f"Error processing uploaded image: {str(img_error)}")
+            return bad_request(f"Invalid image file: {str(img_error)}")
+    
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error uploading page image: {str(e)}")
+        return error_response('SERVER_ERROR', str(e), 500)
