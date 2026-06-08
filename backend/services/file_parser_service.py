@@ -7,12 +7,13 @@ import time
 import logging
 import zipfile
 import io
-import base64
 import requests
+import tempfile
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 from markitdown import MarkItDown
+from services.ai_providers.text import strip_think_tags
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,10 @@ class FileParserService:
                  google_api_key: str = "", google_api_base: str = "",
                  openai_api_key: str = "", openai_api_base: str = "",
                  image_caption_model: str = "gemini-3-flash-preview",
-                 provider_format: str = None):
+                 lazyllm_image_caption_source: str = "", 
+                 provider_format: str = None,
+                 mineru_model_version: str = "vlm",
+                 ):
         """
         Initialize the file parser service
         
@@ -66,52 +70,33 @@ class FileParserService:
             openai_api_key: OpenAI API key for image captioning (used when AI_PROVIDER_FORMAT=openai)
             openai_api_base: OpenAI API base URL
             image_caption_model: Model to use for image captioning
+            lazyllm_image_caption_source: image caption model provider for lazyllm
             provider_format: AI provider format ('gemini' or 'openai'). If not provided, reads from environment variable.
+            mineru_model_version: MinerU model version ('vlm' or 'pipeline'). Default is 'vlm'.
         """
         self.mineru_token = mineru_token
         self.mineru_api_base = mineru_api_base
+        self.mineru_model_version = mineru_model_version
         self.get_upload_url_api = f"{mineru_api_base}/api/v4/file-urls/batch"
         self.get_result_api_template = f"{mineru_api_base}/api/v4/extract-results/batch/{{}}"
         
-        # Store config for lazy initialization
-        self._google_api_key = google_api_key
-        self._google_api_base = google_api_base
-        self._openai_api_key = openai_api_key
-        self._openai_api_base = openai_api_base
-        self.image_caption_model = image_caption_model
-        
-        # Clients will be initialized lazily based on AI_PROVIDER_FORMAT
-        self._gemini_client = None
-        self._openai_client = None
+        self._image_caption_model = image_caption_model
         self._provider_format = _get_ai_provider_format(provider_format)
+        self._caption_provider = None
     
-    def _get_gemini_client(self):
-        """Lazily initialize Gemini client"""
-        if self._gemini_client is None and self._google_api_key:
-            from google import genai
-            from google.genai import types
-            self._gemini_client = genai.Client(
-                http_options=types.HttpOptions(base_url=self._google_api_base) if self._google_api_base else None,
-                api_key=self._google_api_key
-            )
-        return self._gemini_client
-    
-    def _get_openai_client(self):
-        """Lazily initialize OpenAI client"""
-        if self._openai_client is None and self._openai_api_key:
-            from openai import OpenAI
-            self._openai_client = OpenAI(
-                api_key=self._openai_api_key,
-                base_url=self._openai_api_base
-            )
-        return self._openai_client
+    def _get_caption_provider(self):
+        """Lazily initialize caption provider via the provider factory"""
+        if self._caption_provider is None:
+            from services.ai_providers import get_caption_provider
+            self._caption_provider = get_caption_provider(model=self._image_caption_model)
+        return self._caption_provider
     
     def _can_generate_captions(self) -> bool:
         """Check if image caption generation is available"""
-        if self._provider_format == 'openai':
-            return bool(self._openai_api_key)
-        else:
-            return bool(self._google_api_key)
+        try:
+            return self._get_caption_provider() is not None
+        except (ValueError, ImportError):
+            return False
     
     def parse_file(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
@@ -179,7 +164,7 @@ class FileParserService:
                     logger.info("Markdown enhanced with image captions (all images succeeded).")
                 return batch_id, enhanced_content, extract_id, None, failed_count
             else:
-                logger.info("Skipping image caption enhancement (no Gemini client).")
+                logger.info("Skipping image caption enhancement (caption model unavailable).")
                 return batch_id, markdown_content, extract_id, None, 0
             
         except Exception as e:
@@ -281,7 +266,7 @@ class FileParserService:
         
         upload_data = {
             "files": [{"name": filename}],
-            "model_version": "vlm"  # or "pipeline"
+            "model_version": self.mineru_model_version  # "vlm" or "pipeline"
         }
         
         try:
@@ -455,6 +440,53 @@ class FileParserService:
             logger.error(error_msg)
             return None, None, error_msg
     
+    @staticmethod
+    def extract_header_footer_from_layout(extract_id: str) -> str:
+        """
+        从 MinerU layout.json 的 discarded_blocks 中提取页眉页脚文本。
+
+        Args:
+            extract_id: MinerU 解析结果的 extract_id
+
+        Returns:
+            提取到的页眉页脚文本，如无则返回空字符串
+        """
+        import json
+        from pathlib import Path
+
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent
+        mineru_dir = project_root / 'uploads' / 'mineru_files' / extract_id
+        layout_file = mineru_dir / 'layout.json'
+
+        if not layout_file.exists():
+            return ''
+
+        try:
+            with open(layout_file, 'r', encoding='utf-8') as f:
+                layout_data = json.load(f)
+
+            if 'pdf_info' not in layout_data or not layout_data['pdf_info']:
+                return ''
+
+            texts = []
+            for page_info in layout_data['pdf_info']:
+                for block in page_info.get('discarded_blocks', []):
+                    block_type = block.get('type', '')
+                    if block_type not in ('header', 'footer'):
+                        continue
+                    for line in block.get('lines', []):
+                        for span in line.get('spans', []):
+                            if span.get('type') == 'text' and span.get('content', '').strip():
+                                content = span['content'].strip()
+                                if content != '#':
+                                    texts.append(content)
+
+            return '\n'.join(texts)
+        except Exception as e:
+            logger.warning(f"Failed to extract header/footer from layout.json: {e}")
+            return ''
+
     def _replace_image_paths(self, markdown_content: str, markdown_file_path: str, extract_id: str) -> str:
         """Replace relative image paths in markdown with local server URLs"""
         import os
@@ -648,57 +680,30 @@ class FileParserService:
                 logger.warning(f"Unsupported image path type: {image_url}")
                 return ""
             
-            # Generate caption based on provider format
+            # Generate caption via provider factory
             prompt = "请用一句简短的中文描述这张图片的主要内容。只返回描述文字，不要其他解释。"
-            
-            if self._provider_format == 'openai':
-                # Use OpenAI SDK format
-                client = self._get_openai_client()
-                if not client:
-                    logger.warning("OpenAI client not initialized, skipping caption generation")
-                    return ""
-                
-                # Encode image to base64
-                buffered = io.BytesIO()
+
+            with tempfile.NamedTemporaryFile(prefix='caption_', suffix='.jpg', delete=False) as tmp:
+                temp_path = tmp.name
+            try:
                 if image.mode in ('RGBA', 'LA', 'P'):
                     image = image.convert('RGB')
-                image.save(buffered, format="JPEG", quality=95)
-                base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                
-                response = client.chat.completions.create(
-                    model=self.image_caption_model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-                                {"type": "text", "text": prompt}
-                            ]
-                        }
-                    ],
-                    temperature=0.3
-                )
-                caption = response.choices[0].message.content.strip()
-            else:
-                # Use Gemini SDK format (default)
-                from google.genai import types
-                client = self._get_gemini_client()
-                if not client:
-                    logger.warning("Gemini client not initialized, skipping caption generation")
-                    return ""
-                
-                result = client.models.generate_content(
-                    model=self.image_caption_model,
-                    contents=[image, prompt],
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,  # Lower temperature for more consistent captions
-                    )
-                )
-                caption = result.text.strip()
-            
+                image.save(temp_path, format="JPEG", quality=95)
+                image.close()
+
+                provider = self._get_caption_provider()
+                caption = provider.generate_with_image(prompt, temp_path)
+            finally:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+            # Strip <think>...</think> tags from reasoning models
+            caption = strip_think_tags(caption)
+
             return caption
             
         except Exception as e:
             logger.warning(f"Failed to generate caption for {image_url}: {str(e)}")
             return ""  # Return empty string on failure
-
